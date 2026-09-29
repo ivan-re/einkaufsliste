@@ -1,0 +1,57 @@
+rules_version = '2';
+
+// Firestore Security Rules für die Einkaufsliste
+// Einfügen unter: Firebase Console -> Firestore Database -> Regeln -> Veröffentlichen
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /shopping_lists/{listId} {
+
+      function isOwner(d) {
+        return d.ownerId == request.auth.uid;
+      }
+
+      // Lesen: eigene, öffentliche oder für mich freigegebene Listen
+      function canRead(d) {
+        return isOwner(d)
+          || d.isPublic == true
+          || request.auth.uid in d.sharedUserIds;
+      }
+
+      // Bearbeiten: Besitzer, öffentlich mit Bearbeitungsrecht oder individuell mit "edit" freigegeben
+      function canEdit(d) {
+        return isOwner(d)
+          || (d.isPublic == true && d.publicPermission == 'edit')
+          || d.sharedWith.get(request.auth.uid, '') == 'edit';
+      }
+
+      function isValidList(d) {
+        return d.title is string && d.title.size() > 0 && d.title.size() <= 200
+          && d.items is list && d.items.size() <= 500
+          && d.sharedWith is map
+          && d.sharedUserIds is list;
+      }
+
+      allow read: if request.auth != null && canRead(resource.data);
+
+      allow create: if request.auth != null
+        && request.resource.data.ownerId == request.auth.uid
+        && isValidList(request.resource.data);
+
+      // Besitzer darf alles ausser den Besitzer ändern.
+      // Mitbearbeiter dürfen nur Inhalt, Titel und Abschluss ändern, nicht die Freigaben,
+      // und abgeschlossene Listen sind für sie schreibgeschützt.
+      allow update: if request.auth != null
+        && isValidList(request.resource.data)
+        && (
+          (isOwner(resource.data) && request.resource.data.ownerId == resource.data.ownerId)
+          || (canEdit(resource.data)
+              && resource.data.status != 'abgeschlossen'
+              && request.resource.data.diff(resource.data).affectedKeys()
+                   .hasOnly(['items', 'title', 'status', 'completedAt', 'store']))
+        );
+
+      allow delete: if request.auth != null && isOwner(resource.data);
+    }
+  }
+}

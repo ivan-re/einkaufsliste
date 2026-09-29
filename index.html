@@ -168,7 +168,7 @@
                     <input type="text" id="user-name-input" placeholder="z. B. Anna, Max, WG-Küche" class="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none">
                 </div>
 
-                <div class="pt-2 border-t border-slate-100">
+                <div id="test-profile-section" class="pt-2 border-t border-slate-100">
                     <p class="text-xs text-slate-500 mb-2">Simuliere einen weiteren User (zum Testen von Freigaben auf demselben Gerät):</p>
                     <button onclick="switchUserIdentity()" class="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-medium border border-slate-200 transition flex items-center justify-center space-x-2">
                         <i class="fa-solid fa-arrows-rotate"></i>
@@ -414,7 +414,14 @@
         // Projekteinstellungen -> "Meine Apps" -> Web-App). Bleibt sie null,
         // läuft die App im lokalen Modus (Daten nur in diesem Browser).
         // ------------------------------------------------------------------
-        const FIREBASE_CONFIG = null;
+        const FIREBASE_CONFIG = {
+            apiKey: "AIzaSyAZ7LLm4G9BUc5rr2z-IZPMa3IHq425mJI",
+            authDomain: "einkaufsliste-20ef0.firebaseapp.com",
+            projectId: "einkaufsliste-20ef0",
+            storageBucket: "einkaufsliste-20ef0.firebasestorage.app",
+            messagingSenderId: "532472741688",
+            appId: "1:532472741688:web:42f32f5e465880c46a8bcd"
+        };
 
         // In Google Canvas werden diese Variablen automatisch injiziert,
         // auf GitHub Pages existieren sie nicht.
@@ -434,13 +441,23 @@
         if (USE_FIREBASE) {
             const { initializeApp } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js");
             const { getAuth, signInAnonymously, signInWithCustomToken } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js");
-            const { getFirestore, doc, collection, onSnapshot, updateDoc, deleteDoc, addDoc } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
+            const {
+                initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
+                doc, collection, query, where, onSnapshot, updateDoc, deleteDoc, addDoc
+            } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
 
             const app = initializeApp(firebaseConfig);
             const auth = getAuth(app);
-            const db = getFirestore(app);
-            const listsColRef = collection(db, 'artifacts', appId, 'public', 'data', 'shopping_lists');
-            const listDoc = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'shopping_lists', id);
+            // Offline-Cache: Liste bleibt im Laden auch bei schlechtem Empfang nutzbar
+            const db = initializeFirestore(app, {
+                localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+            });
+            // In Canvas gelten dessen Regeln für den artifacts-Pfad, sonst eigene Collection
+            const listsPath = typeof __firebase_config !== 'undefined'
+                ? ['artifacts', appId, 'public', 'data', 'shopping_lists']
+                : ['shopping_lists'];
+            const listsColRef = collection(db, ...listsPath);
+            const listDoc = (id) => doc(db, ...listsPath, id);
 
             store = {
                 async init() {
@@ -449,10 +466,25 @@
                         : await signInAnonymously(auth);
                     authUid = cred.user.uid;
                 },
+                // Nur Listen abfragen, die der User sehen darf (von den Security Rules erzwungen):
+                // eigene, öffentliche und explizit freigegebene
                 subscribe(onData, onError) {
-                    return onSnapshot(listsColRef,
-                        (snapshot) => onData(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))),
-                        onError);
+                    const queries = [
+                        query(listsColRef, where('ownerId', '==', authUid)),
+                        query(listsColRef, where('isPublic', '==', true)),
+                        query(listsColRef, where('sharedUserIds', 'array-contains', authUid))
+                    ];
+                    const results = queries.map(() => new Map());
+                    const emit = () => {
+                        const merged = new Map();
+                        results.forEach(r => r.forEach((data, id) => merged.set(id, data)));
+                        onData([...merged.entries()].map(([id, data]) => ({ id, ...data })));
+                    };
+                    const unsubscribers = queries.map((q, idx) => onSnapshot(q, (snapshot) => {
+                        results[idx] = new Map(snapshot.docs.map(d => [d.id, d.data()]));
+                        emit();
+                    }, onError));
+                    return () => unsubscribers.forEach(unsub => unsub());
                 },
                 add: (data) => addDoc(listsColRef, data),
                 update: (id, patch) => updateDoc(listDoc(id), patch),
@@ -557,21 +589,69 @@
 
             currentUser = { uid: authUid };
             // Setup or load local identity profile
-            const savedProfile = localStorage.getItem('einkaufsliste_user_profile');
-            if (savedProfile) {
-                currentUserProfile = JSON.parse(savedProfile);
-            } else {
+            const savedProfile = JSON.parse(localStorage.getItem('einkaufsliste_user_profile') || 'null');
+            const previousLocalId = savedProfile ? savedProfile.id : null;
+            if (USE_FIREBASE) {
+                // Mit Firebase ist die User ID immer die Anmelde-ID, sonst greifen die Security Rules nicht
                 currentUserProfile = {
+                    id: authUid,
+                    name: (savedProfile && savedProfile.name) || 'User ' + authUid.substring(0, 4)
+                };
+                document.getElementById('test-profile-section').classList.add('hidden');
+            } else {
+                currentUserProfile = savedProfile || {
                     id: authUid,
                     name: 'User ' + authUid.substring(0, 4)
                 };
-                localStorage.setItem('einkaufsliste_user_profile', JSON.stringify(currentUserProfile));
             }
+            localStorage.setItem('einkaufsliste_user_profile', JSON.stringify(currentUserProfile));
             updateUserDisplay();
             listenToShoppingLists();
 
-            if (!USE_FIREBASE) {
+            if (USE_FIREBASE) {
+                await migrateLocalLists(previousLocalId);
+            } else {
                 showNotification('Lokaler Modus: Listen werden nur in diesem Browser gespeichert.', 'info');
+            }
+        }
+
+        // Einmalige Übernahme der Listen aus dem lokalen Modus in Firestore
+        async function migrateLocalLists(previousLocalId) {
+            const MIGRATED_KEY = 'einkaufsliste_migrated_v1';
+            if (localStorage.getItem(MIGRATED_KEY)) return;
+
+            let localLists = [];
+            try {
+                localLists = Object.values(JSON.parse(localStorage.getItem('einkaufsliste_lists_v1')) || {});
+            } catch (err) {
+                localLists = [];
+            }
+            // Nur eigene Listen übernehmen (Test-Profile bleiben lokal)
+            localLists = localLists.filter(l => !previousLocalId || l.ownerId === previousLocalId);
+            if (localLists.length === 0) {
+                localStorage.setItem(MIGRATED_KEY, 'none');
+                return;
+            }
+
+            const ok = confirm(`Es wurden ${localLists.length} Liste(n) aus dem lokalen Modus gefunden.\n\nSollen sie in die Online-Datenbank übernommen werden?`);
+            localStorage.setItem(MIGRATED_KEY, ok ? 'yes' : 'declined');
+            if (!ok) return;
+
+            try {
+                await Promise.all(localLists.map(l => store.add({
+                    ...l,
+                    ownerId: currentUserProfile.id,
+                    ownerName: currentUserProfile.name,
+                    isPublic: false,
+                    publicPermission: 'read',
+                    sharedWith: {},
+                    sharedUserIds: [],
+                    parentListId: null
+                })));
+                showNotification(`${localLists.length} Liste(n) in die Datenbank übernommen.`, 'success');
+            } catch (err) {
+                localStorage.removeItem(MIGRATED_KEY);
+                showNotification('Fehler bei der Übernahme der lokalen Listen: ' + err.message, 'error');
             }
         }
 
@@ -977,6 +1057,7 @@
                     isPublic: false,
                     publicPermission: 'read',
                     sharedWith: {},
+                    sharedUserIds: [],
                     items: [],
                     createdAt: new Date().toISOString()
                 };
@@ -1066,14 +1147,14 @@
                 });
             }
 
+            // Reset inputs sofort (Firestore bestätigt Schreibzugriffe offline erst später)
+            artInput.value = '';
+            qtyInput.value = '1';
+            noteInput.value = '';
+            artInput.focus();
+
             try {
                 await store.update(listId, { items: items });
-
-                // Reset inputs
-                artInput.value = '';
-                qtyInput.value = '1';
-                noteInput.value = '';
-                artInput.focus();
             } catch (err) {
                 showNotification('Fehler beim Hinzufügen der Position: ' + err.message, 'error');
             }
@@ -1256,7 +1337,7 @@
             sharedWith[targetUserId] = perm;
 
             try {
-                await store.update(currentEditingShareList.id, { sharedWith: sharedWith });
+                await store.update(currentEditingShareList.id, { sharedWith: sharedWith, sharedUserIds: Object.keys(sharedWith) });
                 
                 document.getElementById('share-target-user-id').value = '';
                 renderSharedUsersList();
@@ -1272,7 +1353,7 @@
             delete sharedWith[targetUserId];
 
             try {
-                await store.update(currentEditingShareList.id, { sharedWith: sharedWith });
+                await store.update(currentEditingShareList.id, { sharedWith: sharedWith, sharedUserIds: Object.keys(sharedWith) });
                 renderSharedUsersList();
                 showNotification('Freigabe wurde widerrufen.', 'info');
             } catch (err) {

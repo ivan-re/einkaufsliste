@@ -18,35 +18,20 @@ Eine schlanke Web-App zum Planen, Teilen und Abhaken von Einkaufslisten – komp
 
 ## Datenspeicherung
 
-Die App kennt zwei Modi:
+Die Daten liegen in **Cloud Firestore** (Firebase-Projekt `einkaufsliste-20ef0`). Jeder Browser meldet sich automatisch **anonym** an und bekommt eine eigene User-ID.
 
-| Modus | Wann aktiv | Speicherort | Teilen zwischen Geräten |
-|---|---|---|---|
-| **Lokal** (Standard) | `FIREBASE_CONFIG` ist `null` | `localStorage` des Browsers | ❌ nein |
-| **Firebase** | `FIREBASE_CONFIG` ist gesetzt | Cloud Firestore | ✅ ja |
+- Die App lädt nur Listen, die man sehen darf: eigene, öffentliche und für die eigene User-ID freigegebene.
+- Das erzwingen die Sicherheitsregeln in [`firestore.rules`](firestore.rules). Bei Änderungen dort muss man sie in der Firebase-Konsole unter **Firestore → Regeln** neu veröffentlichen.
+- Ein Offline-Cache hält die Listen auch bei schlechtem Empfang im Laden nutzbar. Änderungen werden nachgereicht, sobald wieder Verbindung besteht.
+- Die anonyme User-ID gilt pro Browser. Handy und PC sind darum zwei verschiedene Nutzer. Listen teilt man über die User-ID im Profil.
 
-Im lokalen Modus bleiben die Daten nur im jeweiligen Browser auf dem jeweiligen Gerät. Wenn du die Browserdaten löschst, sind auch die Listen weg.
+**Lokaler Modus:** Setzt man in `index.html` `FIREBASE_CONFIG = null`, speichert die App nur im `localStorage` des Browsers. Dann ist kein Teilen zwischen Geräten möglich.
 
-### Firebase einrichten (optional)
+### Firebase-Einstellungen
 
-1. Auf [console.firebase.google.com](https://console.firebase.google.com) ein Projekt anlegen und darin eine **Web-App** registrieren.
-2. Unter **Authentication → Sign-in method** die Anmeldeart **Anonym** aktivieren.
-3. Unter **Authentication → Settings → Autorisierte Domains** `ivan-re.github.io` hinzufügen.
-4. Eine **Firestore-Datenbank** anlegen und Sicherheitsregeln setzen.
-5. Die Konfiguration der Web-App in `index.html` eintragen:
-
-```js
-const FIREBASE_CONFIG = {
-    apiKey: "...",
-    authDomain: "...",
-    projectId: "...",
-    storageBucket: "...",
-    messagingSenderId: "...",
-    appId: "..."
-};
-```
-
-> ⚠️ Alle Listen liegen in einer gemeinsamen Sammlung. Wer eine Liste sehen darf, entscheidet heute nur die App im Browser. Für echten Datenschutz braucht es passende Firestore-Sicherheitsregeln.
+1. **Authentication → Sign-in method:** Anmeldeart **Anonym** aktivieren.
+2. **Authentication → Settings → Autorisierte Domains:** `ivan-re.github.io` hinzufügen.
+3. **Firestore → Regeln:** den Inhalt von `firestore.rules` einfügen und veröffentlichen.
 
 ## Lokal starten
 
@@ -65,12 +50,12 @@ Danach `http://localhost:8000` (bzw. die angezeigte Adresse) im Browser öffnen.
 - HTML + Vanilla JavaScript (ES-Module)
 - [Tailwind CSS](https://tailwindcss.com) (CDN)
 - [Font Awesome](https://fontawesome.com) für Icons
-- [Firebase](https://firebase.google.com) Auth + Firestore (optional)
+- [Firebase](https://firebase.google.com) Auth (anonym) + Cloud Firestore
 
 ## Bekannte Einschränkungen
 
 - Bei gleichzeitiger Bearbeitung derselben Liste durch mehrere Personen gewinnt die zuletzt gespeicherte Änderung.
-- Die Funktion „Neues Test-Profil erzeugen“ dient nur zum Testen von Freigaben auf einem Gerät.
+- Wer die Browserdaten löscht, verliert seine anonyme User-ID und damit den Zugriff auf seine Listen.
 
 ## Entstehung
 
