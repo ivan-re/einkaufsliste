@@ -874,10 +874,10 @@
                             const category = CATEGORIES.find(c => c.id === item.category) || CATEGORIES[CATEGORIES.length - 1];
 
                             return `
-                                <div data-item-id="${item.id}" class="${canSort && !item.done ? 'sortable-item' : ''} p-3 sm:px-5 flex items-center justify-between gap-3 hover:bg-slate-50/80 transition ${item.done ? 'bg-slate-50/50' : ''}">
+                                <div data-item-id="${item.id}" class="${canSort && !item.done ? 'sortable-item' : ''} p-3 sm:px-5 flex flex-wrap sm:flex-nowrap items-center justify-between gap-x-3 gap-y-1.5 hover:bg-slate-50/80 transition ${item.done ? 'bg-slate-50/50' : ''}">
                                     
                                     <!-- FA-04 Checkbox & Item Info -->
-                                    <div class="flex items-center space-x-3 flex-1 min-w-0">
+                                    <div class="flex items-center space-x-3 flex-1 min-w-0 basis-full sm:basis-auto">
                                         ${canSort ? (item.done
                                             ? '<span class="w-5 shrink-0"></span>'
                                             : '<span class="drag-handle w-5 shrink-0 text-slate-300 hover:text-slate-500 flex items-center justify-center" title="Ziehen zum Sortieren"><i class="fa-solid fa-grip-vertical"></i></span>') : ''}
@@ -887,7 +887,7 @@
 
                                         <div class="min-w-0 flex-1">
                                             <div class="flex items-center space-x-2">
-                                                <span class="font-medium text-sm text-slate-800 break-words ${item.done ? 'line-through text-slate-400' : ''}">
+                                                <span class="min-w-0 font-medium text-sm text-slate-800 break-words ${item.done ? 'line-through text-slate-400' : ''}">
                                                     ${escapeHtml(item.article)}
                                                 </span>
                                                 <span class="${category.color} text-[10px] font-semibold px-2 py-0.5 rounded-md shrink-0 flex items-center space-x-1">
@@ -900,7 +900,7 @@
                                     </div>
 
                                     <!-- FA-03 Inline Quantity Adjuster -->
-                                    <div class="flex items-center space-x-3 shrink-0">
+                                    <div class="flex items-center space-x-3 shrink-0 w-full sm:w-auto justify-end">
                                         ${!isCompleted && canEdit ? `
                                             <div class="flex items-center bg-slate-100 rounded-lg p-0.5 border border-slate-200">
                                                 <button onclick="handleUpdateQty('${list.id}', '${item.id}', -1)" class="w-6 h-6 rounded-md bg-white hover:bg-slate-200 text-slate-700 flex items-center justify-center text-xs font-bold shadow-sm active:scale-95 transition">
