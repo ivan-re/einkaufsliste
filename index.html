@@ -185,13 +185,14 @@
             <div class="bg-slate-50 p-4 border-b border-slate-100 flex items-center justify-between">
                 <h3 class="font-bold text-slate-800 flex items-center space-x-2">
                     <i class="fa-solid fa-cart-plus text-emerald-600"></i>
-                    <span>Neue Einkaufsliste anlegen</span>
+                    <span id="create-list-heading">Neue Einkaufsliste anlegen</span>
                 </h3>
                 <button onclick="closeModal('modal-create-list')" class="text-slate-400 hover:text-slate-600 p-1">
                     <i class="fa-solid fa-xmark text-lg"></i>
                 </button>
             </div>
             <form id="form-create-list" onsubmit="handleCreateList(event)" class="p-5 space-y-4">
+                <input type="hidden" id="new-list-template-id">
                 <div>
                     <label class="block text-xs font-semibold text-slate-700 mb-1">Titel der Liste <span class="text-red-500">*</span></label>
                     <input type="text" id="new-list-title" required placeholder="z. B. Wocheneinkauf Coop, Party-Vorrat" class="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none">
@@ -206,6 +207,7 @@
                         <li>Status: <span class="font-semibold text-slate-700">Offen</span></li>
                         <li>Sichtbarkeit: <span class="font-semibold text-slate-700">Privat</span> (später teilbar)</li>
                         <li>Besitzer: <span id="new-list-owner-preview" class="font-semibold text-slate-700">Du</span></li>
+                        <li id="new-list-template-info" class="hidden">Positionen: <span id="new-list-template-count" class="font-semibold text-slate-700">0</span> aus Vorlage übernommen</li>
                     </ul>
                 </div>
 
@@ -214,7 +216,37 @@
                         Abbrechen
                     </button>
                     <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm px-5 py-2 rounded-xl shadow-sm transition">
-                        Liste erstellen
+                        <span id="create-list-submit-label">Liste erstellen</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal: Rename Shopping List -->
+    <div id="modal-rename-list" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-white w-full max-w-md rounded-2xl shadow-xl border border-slate-100 overflow-hidden">
+            <div class="bg-slate-50 p-4 border-b border-slate-100 flex items-center justify-between">
+                <h3 class="font-bold text-slate-800 flex items-center space-x-2">
+                    <i class="fa-solid fa-pen text-emerald-600"></i>
+                    <span>Liste umbenennen</span>
+                </h3>
+                <button onclick="closeModal('modal-rename-list')" class="text-slate-400 hover:text-slate-600 p-1">
+                    <i class="fa-solid fa-xmark text-lg"></i>
+                </button>
+            </div>
+            <form id="form-rename-list" onsubmit="handleRenameList(event)" class="p-5 space-y-4">
+                <input type="hidden" id="rename-list-id">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 mb-1">Neuer Titel <span class="text-red-500">*</span></label>
+                    <input type="text" id="rename-list-title" required class="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                </div>
+                <div class="pt-2 flex justify-end space-x-2">
+                    <button type="button" onclick="closeModal('modal-rename-list')" class="px-4 py-2 border border-slate-200 hover:bg-slate-100 text-slate-700 rounded-xl text-sm font-medium transition">
+                        Abbrechen
+                    </button>
+                    <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm px-5 py-2 rounded-xl shadow-sm transition">
+                        Speichern
                     </button>
                 </div>
             </form>
@@ -595,9 +627,9 @@
 
                 // Apply search filter
                 if (searchKeyword) {
-                    const matchTitle = list.title.toLowerCase().includes(searchKeyword);
+                    const matchTitle = (list.title || '').toLowerCase().includes(searchKeyword);
                     const matchStore = list.store && list.store.toLowerCase().includes(searchKeyword);
-                    const matchItems = list.items && list.items.some(item => item.article.toLowerCase().includes(searchKeyword));
+                    const matchItems = list.items && list.items.some(item => (item.article || '').toLowerCase().includes(searchKeyword));
                     if (!matchTitle && !matchStore && !matchItems) return;
                 }
 
@@ -654,6 +686,8 @@
             // Render List Cards
             container.innerHTML = displayLists.map(list => renderListCard(list)).join('');
         }
+
+        window.renderLists = renderLists;
 
         function renderListCard(list) {
             const isOwner = list.ownerId === currentUserProfile.id;
@@ -725,6 +759,12 @@
                                 <button onclick="handleUseAsTemplate('${list.id}')" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-3 py-1.5 rounded-xl shadow-sm transition flex items-center space-x-1.5" title="Erstellt eine neue offene Liste mit diesen Positionen">
                                     <i class="fa-solid fa-copy"></i>
                                     <span>Als Vorlage verwenden</span>
+                                </button>
+                            ` : ''}
+
+                            ${!isCompleted && canEdit ? `
+                                <button onclick="openRenameModal('${list.id}')" class="p-2 text-slate-500 hover:text-emerald-600 hover:bg-slate-100 rounded-xl transition" title="Liste umbenennen">
+                                    <i class="fa-solid fa-pen"></i>
                                 </button>
                             ` : ''}
 
@@ -848,16 +888,37 @@
             `;
         }
 
-        window.openCreateListModal = () => {
-            document.getElementById('new-list-title').value = '';
+        // Öffnet das Anlage-Popup; mit sourceList als Vorlage (FA-09)
+        function showCreateListModal(sourceList = null) {
+            const titleInput = document.getElementById('new-list-title');
+            titleInput.value = sourceList ? `Kopie von ${sourceList.title}` : '';
+            document.getElementById('new-list-template-id').value = sourceList ? sourceList.id : '';
             document.getElementById('new-list-owner-preview').innerText = currentUserProfile.name || 'Du';
+            document.getElementById('create-list-heading').innerText = sourceList ? 'Neue Liste aus Vorlage' : 'Neue Einkaufsliste anlegen';
+            document.getElementById('create-list-submit-label').innerText = sourceList ? 'Aus Vorlage erstellen' : 'Liste erstellen';
+            document.getElementById('new-list-template-count').innerText = sourceList ? (sourceList.items || []).length : 0;
+            document.getElementById('new-list-template-info').classList.toggle('hidden', !sourceList);
+
             openModal('modal-create-list');
+            titleInput.focus();
+            titleInput.select();
+        }
+
+        window.openCreateListModal = () => showCreateListModal();
+
+        window.handleUseAsTemplate = (sourceListId) => {
+            const sourceList = shoppingLists.find(l => l.id === sourceListId);
+            if (!sourceList) return;
+            showCreateListModal(sourceList);
         };
 
         window.handleCreateList = async (e) => {
             e.preventDefault();
             const title = document.getElementById('new-list-title').value.trim();
             if (!title) return;
+
+            const templateId = document.getElementById('new-list-template-id').value;
+            const sourceList = templateId ? shoppingLists.find(l => l.id === templateId) : null;
 
             try {
                 // FA-01: Status Offen, Besitzer = aktueller User, Privat
@@ -873,12 +934,52 @@
                     createdAt: new Date().toISOString()
                 };
 
+                if (sourceList) {
+                    // FA-09: Positionen übernehmen, Häkchen zurücksetzen
+                    newList.items = (sourceList.items || []).map(item => ({
+                        ...item,
+                        id: crypto.randomUUID(),
+                        done: false
+                    }));
+                    newList.parentListId = sourceList.id; // Referenz auf Quelle gespeichert
+                }
+
                 closeModal('modal-create-list');
+                if (sourceList) switchTab('active');
 
                 await store.add(newList);
-                showNotification('Einkaufsliste "' + title + '" wurde angelegt!', 'success');
+                showNotification(sourceList
+                    ? 'Neue Liste "' + title + '" aus Vorlage gestartet!'
+                    : 'Einkaufsliste "' + title + '" wurde angelegt!', 'success');
             } catch (err) {
                 showNotification('Fehler beim Anlegen: ' + err.message, 'error');
+            }
+        };
+
+        window.openRenameModal = (listId) => {
+            const list = shoppingLists.find(l => l.id === listId);
+            if (!list) return;
+
+            const titleInput = document.getElementById('rename-list-title');
+            document.getElementById('rename-list-id').value = listId;
+            titleInput.value = list.title;
+            openModal('modal-rename-list');
+            titleInput.focus();
+            titleInput.select();
+        };
+
+        window.handleRenameList = async (e) => {
+            e.preventDefault();
+            const listId = document.getElementById('rename-list-id').value;
+            const title = document.getElementById('rename-list-title').value.trim();
+            if (!listId || !title) return;
+
+            closeModal('modal-rename-list');
+            try {
+                await store.update(listId, { title: title });
+                showNotification('Liste in "' + title + '" umbenannt.', 'success');
+            } catch (err) {
+                showNotification('Fehler beim Umbenennen: ' + err.message, 'error');
             }
         };
 
@@ -1037,40 +1138,6 @@
                 showNotification('Einkauf wurde erfolgreich abgeschlossen und archiviert.', 'success');
             } catch (err) {
                 showNotification('Fehler beim Abschliessen: ' + err.message, 'error');
-            }
-        };
-
-        window.handleUseAsTemplate = async (sourceListId) => {
-            const sourceList = shoppingLists.find(l => l.id === sourceListId);
-            if (!sourceList) return;
-
-            try {
-                // FA-09: Kopiert Kopf und Positionen in neue offene Liste; Häkchen zurückgesetzt
-                const copiedItems = (sourceList.items || []).map(item => ({
-                    ...item,
-                    id: crypto.randomUUID(),
-                    done: false // Reset checkboxes
-                }));
-
-                const newList = {
-                    title: `Kopie von ${sourceList.title}`,
-                    status: 'offen',
-                    ownerId: currentUserProfile.id,
-                    ownerName: currentUserProfile.name || 'User ' + currentUserProfile.id.substring(0, 4),
-                    isPublic: false,
-                    publicPermission: 'read',
-                    sharedWith: {},
-                    items: copiedItems,
-                    parentListId: sourceListId, // Referenz auf Quelle gespeichert
-                    createdAt: new Date().toISOString()
-                };
-
-                await store.add(newList);
-
-                switchTab('active');
-                showNotification('Neue offene Liste aus Vorlage gestartet!', 'success');
-            } catch (err) {
-                showNotification('Fehler beim Erstellen der Vorlage: ' + err.message, 'error');
             }
         };
 
