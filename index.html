@@ -24,6 +24,8 @@
             }
         }
     </script>
+    <!-- SortableJS (Drag & Drop der Positionen) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.6/Sortable.min.js"></script>
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Google Font Inter -->
@@ -35,6 +37,9 @@
         body { font-family: 'Inter', sans-serif; }
         .tab-active { border-bottom-color: #16a34a; color: #16a34a; font-weight: 600; }
         .touch-action-manipulation { touch-action: manipulation; }
+        .drag-handle { touch-action: none; cursor: grab; }
+        .drag-handle:active { cursor: grabbing; }
+        .sortable-ghost { opacity: 0.4; background: #ecfdf5; }
         /* Custom scrollbar */
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: #f1f5f9; }
@@ -685,6 +690,44 @@
 
             // Render List Cards
             container.innerHTML = displayLists.map(list => renderListCard(list)).join('');
+            initItemSorting(container);
+        }
+
+        // Drag & Drop: Reihenfolge der offenen Positionen ändern (z. B. Laden-Route)
+        function initItemSorting(container) {
+            if (typeof Sortable === 'undefined') return;
+
+            container.querySelectorAll('.item-sortable').forEach(el => {
+                Sortable.create(el, {
+                    handle: '.drag-handle',
+                    draggable: '.sortable-item', // abgehakte Positionen bleiben unten
+                    animation: 150,
+                    ghostClass: 'sortable-ghost',
+                    onEnd: (evt) => {
+                        if (evt.oldIndex !== evt.newIndex) {
+                            handleReorderItems(el.dataset.listId, el);
+                        }
+                    }
+                });
+            });
+        }
+
+        async function handleReorderItems(listId, el) {
+            const list = shoppingLists.find(l => l.id === listId);
+            if (!list) return;
+
+            const items = list.items || [];
+            const orderedIds = [...el.querySelectorAll('.sortable-item')].map(row => row.dataset.itemId);
+            const openItems = orderedIds.map(id => items.find(i => i.id === id)).filter(Boolean);
+            const remainingItems = items.filter(i => !orderedIds.includes(i.id));
+            const reordered = [...openItems, ...remainingItems];
+
+            list.items = reordered;
+            try {
+                await store.update(listId, { items: reordered });
+            } catch (err) {
+                showNotification('Fehler beim Sortieren: ' + err.message, 'error');
+            }
         }
 
         window.renderLists = renderLists;
@@ -694,6 +737,7 @@
             const right = getListAccessRight(list);
             const canEdit = right === 'owner' || right === 'edit';
             const isCompleted = list.status === 'abgeschlossen';
+            const canSort = canEdit && !isCompleted && typeof Sortable !== 'undefined';
 
             // Items sorting: unchecked first, checked at bottom (FA-04)
             const items = list.items || [];
@@ -819,7 +863,7 @@
                     ` : ''}
 
                     <!-- Position List Table/Items (FA-03, FA-04) -->
-                    <div class="divide-y divide-slate-100 max-h-96 overflow-y-auto">
+                    <div class="divide-y divide-slate-100 max-h-96 overflow-y-auto ${canSort ? 'item-sortable' : ''}" data-list-id="${list.id}">
                         ${sortedItems.length === 0 ? `
                             <div class="p-6 text-center text-xs text-slate-400">
                                 Noch keine Positionen auf dieser Liste.
@@ -830,10 +874,13 @@
                             const category = CATEGORIES.find(c => c.id === item.category) || CATEGORIES[CATEGORIES.length - 1];
 
                             return `
-                                <div class="p-3 sm:px-5 flex items-center justify-between gap-3 hover:bg-slate-50/80 transition ${item.done ? 'bg-slate-50/50' : ''}">
+                                <div data-item-id="${item.id}" class="${canSort && !item.done ? 'sortable-item' : ''} p-3 sm:px-5 flex items-center justify-between gap-3 hover:bg-slate-50/80 transition ${item.done ? 'bg-slate-50/50' : ''}">
                                     
                                     <!-- FA-04 Checkbox & Item Info -->
                                     <div class="flex items-center space-x-3 flex-1 min-w-0">
+                                        ${canSort ? (item.done
+                                            ? '<span class="w-5 shrink-0"></span>'
+                                            : '<span class="drag-handle w-5 shrink-0 text-slate-300 hover:text-slate-500 flex items-center justify-center" title="Ziehen zum Sortieren"><i class="fa-solid fa-grip-vertical"></i></span>') : ''}
                                         <button onclick="handleToggleItemDone('${list.id}', '${item.id}')" ${!canEdit || isCompleted ? 'disabled' : ''} class="w-6 h-6 rounded-lg border-2 flex items-center justify-center shrink-0 transition ${item.done ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-300 hover:border-emerald-500 bg-white'}">
                                             ${item.done ? '<i class="fa-solid fa-check text-xs"></i>' : ''}
                                         </button>
