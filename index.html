@@ -151,6 +151,23 @@
                 </button>
             </div>
             <div class="p-5 space-y-4">
+                <!-- Konto: anonym oder mit Google verknüpft -->
+                <div id="account-section" class="hidden bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2.5">
+                    <div class="flex items-center space-x-2 text-sm font-semibold text-slate-800">
+                        <i class="fa-solid fa-shield-halved text-emerald-600"></i>
+                        <span>Konto</span>
+                    </div>
+                    <p id="account-status" class="text-xs text-slate-600"></p>
+                    <button id="account-google-btn" onclick="signInWithGoogle()" class="w-full py-2 bg-white hover:bg-slate-100 text-slate-700 rounded-xl text-sm font-medium border border-slate-300 shadow-sm transition flex items-center justify-center space-x-2 disabled:opacity-50">
+                        <i class="fa-brands fa-google text-rose-500"></i>
+                        <span>Mit Google anmelden</span>
+                    </button>
+                    <button id="account-signout-btn" onclick="signOutAccount()" class="hidden w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-medium border border-slate-200 transition flex items-center justify-center space-x-2">
+                        <i class="fa-solid fa-right-from-bracket"></i>
+                        <span>Abmelden</span>
+                    </button>
+                </div>
+
                 <div class="bg-emerald-50 p-3.5 rounded-xl border border-emerald-100">
                     <label class="block text-xs font-bold text-emerald-800 uppercase tracking-wider mb-1">Deine eindeutige User ID</label>
                     <div class="flex items-center space-x-2">
@@ -439,10 +456,13 @@
         let authUid = null;
 
         if (USE_FIREBASE) {
-            const { initializeApp } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js");
-            const { getAuth, signInAnonymously, signInWithCustomToken } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js");
+            const { initializeApp, deleteApp } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js");
             const {
-                initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
+                getAuth, initializeAuth, inMemoryPersistence, signInAnonymously, signInWithCustomToken,
+                GoogleAuthProvider, linkWithPopup, signInWithCredential, signOut
+            } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js");
+            const {
+                initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager,
                 doc, collection, query, where, onSnapshot, updateDoc, deleteDoc, addDoc
             } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
 
@@ -453,19 +473,66 @@
                 localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
             });
             // In Canvas gelten dessen Regeln für den artifacts-Pfad, sonst eigene Collection
-            const listsPath = typeof __firebase_config !== 'undefined'
+            const isCanvas = typeof __firebase_config !== 'undefined';
+            const listsPath = isCanvas
                 ? ['artifacts', appId, 'public', 'data', 'shopping_lists']
                 : ['shopping_lists'];
             const listsColRef = collection(db, ...listsPath);
             const listDoc = (id) => doc(db, ...listsPath, id);
 
+            // Eigene Listen des anonymen Users in ein bestehendes Google-Konto verschieben.
+            // Eine zweite, temporäre Firebase-Instanz meldet sich mit Google an und legt die
+            // Kopien an; die Originale löscht danach noch der anonyme Besitzer.
+            async function transferListsToAccount(credential, lists) {
+                const helperApp = initializeApp(firebaseConfig, 'list-transfer-' + Date.now());
+                try {
+                    const helperAuth = initializeAuth(helperApp, { persistence: inMemoryPersistence });
+                    const { user } = await signInWithCredential(helperAuth, credential);
+                    const helperCol = collection(getFirestore(helperApp), ...listsPath);
+                    for (const list of lists) {
+                        const { id, ...data } = list;
+                        await addDoc(helperCol, { ...data, ownerId: user.uid });
+                        await deleteDoc(listDoc(id));
+                    }
+                } finally {
+                    await deleteApp(helperApp);
+                }
+            }
+
             store = {
-                async init() {
-                    const cred = (typeof __initial_auth_token !== 'undefined' && __initial_auth_token)
-                        ? await signInWithCustomToken(auth, __initial_auth_token)
-                        : await signInAnonymously(auth);
-                    authUid = cred.user.uid;
+                supportsGoogle: !isCanvas,
+                get account() {
+                    const u = auth.currentUser;
+                    return u ? { isAnonymous: u.isAnonymous, email: u.email, displayName: u.displayName } : null;
                 },
+                async init() {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        // Bestehende Anmeldung (anonym oder Google) weiterverwenden
+                        await auth.authStateReady();
+                        if (!auth.currentUser) await signInAnonymously(auth);
+                    }
+                    authUid = auth.currentUser.uid;
+                },
+                // Liefert { switched: false } wenn das anonyme Konto verknüpft wurde (ID bleibt),
+                // { switched: true, moved } wenn auf ein bereits bestehendes Google-Konto gewechselt wurde
+                async signInWithGoogle(ownLists) {
+                    const provider = new GoogleAuthProvider();
+                    provider.setCustomParameters({ prompt: 'select_account' });
+                    try {
+                        await linkWithPopup(auth.currentUser, provider);
+                        return { switched: false };
+                    } catch (err) {
+                        if (err.code !== 'auth/credential-already-in-use') throw err;
+                        const credential = GoogleAuthProvider.credentialFromError(err);
+                        if (!credential) throw err;
+                        if (ownLists.length > 0) await transferListsToAccount(credential, ownLists);
+                        await signInWithCredential(auth, credential);
+                        return { switched: true, moved: ownLists.length };
+                    }
+                },
+                signOut: () => signOut(auth),
                 // Nur Listen abfragen, die der User sehen darf (von den Security Rules erzwungen):
                 // eigene, öffentliche und explizit freigegebene
                 subscribe(onData, onError) {
@@ -517,6 +584,8 @@
             });
 
             store = {
+                supportsGoogle: false,
+                account: null,
                 async init() {
                     authUid = crypto.randomUUID();
                 },
@@ -593,11 +662,17 @@
             const previousLocalId = savedProfile ? savedProfile.id : null;
             if (USE_FIREBASE) {
                 // Mit Firebase ist die User ID immer die Anmelde-ID, sonst greifen die Security Rules nicht
+                const account = store.account;
+                const savedName = savedProfile && savedProfile.name;
+                const isDefaultName = !savedName || /^User \S{4}$/.test(savedName);
                 currentUserProfile = {
                     id: authUid,
-                    name: (savedProfile && savedProfile.name) || 'User ' + authUid.substring(0, 4)
+                    name: (isDefaultName && account && account.displayName)
+                        || savedName
+                        || 'User ' + authUid.substring(0, 4)
                 };
                 document.getElementById('test-profile-section').classList.add('hidden');
+                updateAccountDisplay();
             } else {
                 currentUserProfile = savedProfile || {
                     id: authUid,
@@ -607,6 +682,13 @@
             localStorage.setItem('einkaufsliste_user_profile', JSON.stringify(currentUserProfile));
             updateUserDisplay();
             listenToShoppingLists();
+
+            // Meldung aus der Zeit vor einem Neuladen (Kontowechsel) anzeigen
+            const flash = sessionStorage.getItem('einkaufsliste_flash');
+            if (flash) {
+                sessionStorage.removeItem('einkaufsliste_flash');
+                showNotification(flash, 'success');
+            }
 
             if (USE_FIREBASE) {
                 await migrateLocalLists(previousLocalId);
@@ -1416,6 +1498,76 @@
             closeModal('modal-user-profile');
             renderLists();
             showNotification('Profil aktualisiert.', 'success');
+        };
+
+        function updateAccountDisplay() {
+            const section = document.getElementById('account-section');
+            const account = store.account;
+            if (!store.supportsGoogle || !account) {
+                section.classList.add('hidden');
+                return;
+            }
+            section.classList.remove('hidden');
+
+            const status = document.getElementById('account-status');
+            const googleBtn = document.getElementById('account-google-btn');
+            const signOutBtn = document.getElementById('account-signout-btn');
+            if (account.isAnonymous) {
+                status.innerText = 'Du bist anonym angemeldet. Deine Listen sind nur an diesen Browser gebunden. '
+                    + 'Mit Google anmelden, um sie auf allen Geräten zu sehen und nicht zu verlieren.';
+                googleBtn.classList.remove('hidden');
+                signOutBtn.classList.add('hidden');
+            } else {
+                status.innerHTML = `Angemeldet mit Google als <strong>${escapeHtml(account.email || account.displayName || '')}</strong>.`;
+                googleBtn.classList.add('hidden');
+                signOutBtn.classList.remove('hidden');
+            }
+        }
+
+        window.signInWithGoogle = async () => {
+            const btn = document.getElementById('account-google-btn');
+            btn.disabled = true;
+            try {
+                const ownLists = shoppingLists.filter(l => l.ownerId === currentUserProfile.id);
+                const result = await store.signInWithGoogle(ownLists);
+
+                if (result.switched) {
+                    // Anderer User: sauber neu starten (Listener, Profil, Cache)
+                    sessionStorage.setItem('einkaufsliste_flash', result.moved > 0
+                        ? `Mit Google angemeldet. ${result.moved} Liste(n) dieses Geräts wurden in dein Konto übernommen.`
+                        : 'Mit Google angemeldet.');
+                    location.reload();
+                    return;
+                }
+
+                const account = store.account;
+                if (account.displayName && /^User \S{4}$/.test(currentUserProfile.name)) {
+                    currentUserProfile.name = account.displayName;
+                    localStorage.setItem('einkaufsliste_user_profile', JSON.stringify(currentUserProfile));
+                }
+                updateUserDisplay();
+                updateAccountDisplay();
+                showNotification('Mit Google verknüpft. Deine Listen bleiben erhalten und sind jetzt auf allen Geräten verfügbar.', 'success');
+            } catch (err) {
+                if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') return;
+                const msg = err.code === 'auth/popup-blocked'
+                    ? 'Das Anmeldefenster wurde vom Browser blockiert. Bitte Popups für diese Seite erlauben.'
+                    : 'Google-Anmeldung fehlgeschlagen: ' + err.message;
+                showNotification(msg, 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        };
+
+        window.signOutAccount = async () => {
+            if (!confirm('Abmelden? Auf diesem Gerät bist du danach wieder anonym. Deine Listen siehst du wieder, sobald du dich erneut mit Google anmeldest.')) return;
+            try {
+                await store.signOut();
+                localStorage.removeItem('einkaufsliste_user_profile');
+                location.reload();
+            } catch (err) {
+                showNotification('Abmelden fehlgeschlagen: ' + err.message, 'error');
+            }
         };
 
         window.switchUserIdentity = () => {

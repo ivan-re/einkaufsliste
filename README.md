@@ -18,18 +18,19 @@ Eine schlanke Web-App zum Planen, Teilen und Abhaken von Einkaufslisten – komp
 
 ## Datenspeicherung
 
-Die Daten liegen in **Cloud Firestore** (Firebase-Projekt `einkaufsliste-20ef0`). Jeder Browser meldet sich automatisch **anonym** an und bekommt eine eigene User-ID.
+Die Daten liegen in **Cloud Firestore** (Firebase-Projekt `einkaufsliste-20ef0`). Jeder Browser meldet sich zuerst automatisch **anonym** an. Im Profil kann man sich zusätzlich **mit Google anmelden**: Dann ist man auf allen Geräten derselbe Nutzer, und die Listen gehen beim Löschen der Browserdaten nicht verloren.
 
 - Die App lädt nur Listen, die man sehen darf: eigene, öffentliche und für die eigene User-ID freigegebene.
 - Das erzwingen die Sicherheitsregeln in [`firestore.rules`](firestore.rules). Bei Änderungen dort muss man sie in der Firebase-Konsole unter **Firestore → Regeln** neu veröffentlichen.
 - Ein Offline-Cache hält die Listen auch bei schlechtem Empfang im Laden nutzbar. Änderungen werden nachgereicht, sobald wieder Verbindung besteht.
-- Die anonyme User-ID gilt pro Browser. Handy und PC sind darum zwei verschiedene Nutzer. Listen teilt man über die User-ID im Profil.
+- Ohne Google-Anmeldung gilt die User-ID nur pro Browser. Handy und PC sind dann zwei verschiedene Nutzer.
+- Beim ersten Google-Login wird das anonyme Konto verknüpft, die User-ID bleibt gleich. Ist das Google-Konto schon mit einem anderen Gerät verknüpft, werden die Listen dieses Geräts ins Google-Konto verschoben.
 
 **Lokaler Modus:** Setzt man in `index.html` `FIREBASE_CONFIG = null`, speichert die App nur im `localStorage` des Browsers. Dann ist kein Teilen zwischen Geräten möglich.
 
 ### Firebase-Einstellungen
 
-1. **Authentication → Sign-in method:** Anmeldeart **Anonym** aktivieren.
+1. **Authentication → Sign-in method:** Anmeldearten **Anonym** und **Google** aktivieren.
 2. **Authentication → Settings → Autorisierte Domains:** `ivan-re.github.io` hinzufügen.
 3. **Firestore → Regeln:** den Inhalt von `firestore.rules` einfügen und veröffentlichen.
 
@@ -50,12 +51,12 @@ Danach `http://localhost:8000` (bzw. die angezeigte Adresse) im Browser öffnen.
 - HTML + Vanilla JavaScript (ES-Module)
 - [Tailwind CSS](https://tailwindcss.com) (CDN)
 - [Font Awesome](https://fontawesome.com) für Icons
-- [Firebase](https://firebase.google.com) Auth (anonym) + Cloud Firestore
+- [Firebase](https://firebase.google.com) Auth (anonym + Google) + Cloud Firestore
 
 ## Bekannte Einschränkungen
 
 - Bei gleichzeitiger Bearbeitung derselben Liste durch mehrere Personen gewinnt die zuletzt gespeicherte Änderung.
-- Wer die Browserdaten löscht, verliert seine anonyme User-ID und damit den Zugriff auf seine Listen.
+- Wer ohne Google-Anmeldung die Browserdaten löscht, verliert seine anonyme User-ID und damit den Zugriff auf seine Listen.
 
 ## Entstehung
 
