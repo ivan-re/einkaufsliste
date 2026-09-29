@@ -220,6 +220,14 @@
                     <input type="text" id="new-list-title" required placeholder="z. B. Wocheneinkauf Coop, Party-Vorrat" class="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none">
                 </div>
 
+                <div id="new-list-import-row" class="flex items-center justify-between gap-2 text-xs">
+                    <span class="text-slate-500">Positionen aus einer Excel-Datei übernehmen?</span>
+                    <button type="button" onclick="startExcelImport()" class="shrink-0 px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 rounded-lg font-medium transition flex items-center space-x-1.5">
+                        <i class="fa-solid fa-file-excel text-emerald-600"></i>
+                        <span>Aus Excel importieren</span>
+                    </button>
+                </div>
+
                 <div class="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2 text-xs text-slate-600">
                     <div class="flex items-center space-x-2 text-slate-700 font-medium">
                         <i class="fa-solid fa-lock text-emerald-600"></i>
@@ -229,7 +237,7 @@
                         <li>Status: <span class="font-semibold text-slate-700">Offen</span></li>
                         <li>Sichtbarkeit: <span class="font-semibold text-slate-700">Privat</span> (später teilbar)</li>
                         <li>Besitzer: <span id="new-list-owner-preview" class="font-semibold text-slate-700">Du</span></li>
-                        <li id="new-list-template-info" class="hidden">Positionen: <span id="new-list-template-count" class="font-semibold text-slate-700">0</span> aus Vorlage übernommen</li>
+                        <li id="new-list-template-info" class="hidden">Positionen: <span id="new-list-template-count" class="font-semibold text-slate-700">0</span> aus <span id="new-list-template-source">Vorlage</span> übernommen</li>
                     </ul>
                 </div>
 
@@ -244,6 +252,9 @@
             </form>
         </div>
     </div>
+
+    <!-- Versteckter Datei-Dialog für den Excel-Import -->
+    <input type="file" id="excel-file-input" accept=".xlsx,.xls,.csv,.ods" class="hidden" onchange="handleExcelFileSelected(event)">
 
     <!-- Modal: Rename Shopping List -->
     <div id="modal-rename-list" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
@@ -969,6 +980,16 @@
                             ` : ''}
 
                             ${!isCompleted && canEdit ? `
+                                <button onclick="startExcelImport('${list.id}')" class="p-2 text-slate-500 hover:text-emerald-600 hover:bg-slate-100 rounded-xl transition" title="Positionen aus Excel importieren">
+                                    <i class="fa-solid fa-file-import"></i>
+                                </button>
+                            ` : ''}
+
+                            <button onclick="exportListToExcel('${list.id}')" class="p-2 text-slate-500 hover:text-emerald-600 hover:bg-slate-100 rounded-xl transition" title="Als Excel exportieren">
+                                <i class="fa-solid fa-file-excel"></i>
+                            </button>
+
+                            ${!isCompleted && canEdit ? `
                                 <button onclick="openRenameModal('${list.id}')" class="p-2 text-slate-500 hover:text-emerald-600 hover:bg-slate-100 rounded-xl transition" title="Liste umbenennen">
                                     <i class="fa-solid fa-pen"></i>
                                 </button>
@@ -1014,7 +1035,7 @@
                                     </div>
                                 </div>
                                 <div class="flex items-center gap-2">
-                                    <input type="text" id="item-note-${list.id}" placeholder="Notiz (optional, z. B. fettarm, Bio)" class="flex-1 px-3 py-1.5 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white">
+                                    <input type="text" id="item-note-${list.id}" placeholder="Notiz (optional, z. B. fettarm, Bio)" class="flex-1 min-w-0 px-3 py-1.5 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white">
                                     <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs px-4 py-1.5 rounded-xl shadow-sm transition shrink-0 flex items-center space-x-1">
                                         <i class="fa-solid fa-plus"></i>
                                         <span>Position hinzufügen</span>
@@ -1097,6 +1118,9 @@
             `;
         }
 
+        // Aus Excel eingelesene Positionen für eine neue Liste (siehe Excel-Import)
+        let importedItems = null;
+
         // Öffnet das Anlage-Popup; mit sourceList als Vorlage (FA-09)
         function showCreateListModal(sourceList = null) {
             const titleInput = document.getElementById('new-list-title');
@@ -1107,6 +1131,9 @@
             document.getElementById('create-list-submit-label').innerText = sourceList ? 'Aus Vorlage erstellen' : 'Liste erstellen';
             document.getElementById('new-list-template-count').innerText = sourceList ? (sourceList.items || []).length : 0;
             document.getElementById('new-list-template-info').classList.toggle('hidden', !sourceList);
+            document.getElementById('new-list-template-source').innerText = 'Vorlage';
+            document.getElementById('new-list-import-row').classList.toggle('hidden', !!sourceList);
+            importedItems = null;
 
             openModal('modal-create-list');
             titleInput.focus();
@@ -1152,7 +1179,10 @@
                         done: false
                     }));
                     newList.parentListId = sourceList.id; // Referenz auf Quelle gespeichert
+                } else if (importedItems) {
+                    newList.items = importedItems;
                 }
+                importedItems = null;
 
                 closeModal('modal-create-list');
                 if (sourceList) switchTab('active');
@@ -1163,6 +1193,193 @@
                     : 'Einkaufsliste "' + title + '" wurde angelegt!', 'success');
             } catch (err) {
                 showNotification('Fehler beim Anlegen: ' + err.message, 'error');
+            }
+        };
+
+        // ------------------------------------------------------------------
+        // Excel Import / Export (SheetJS, wird erst bei Bedarf geladen)
+        // ------------------------------------------------------------------
+        const MAX_ITEMS = 500; // Grenze aus den Firestore-Regeln
+        const EXCEL_COLUMNS = ['Artikel', 'Menge', 'Einheit', 'Kategorie', 'Notiz', 'Erledigt'];
+        const HEADER_SYNONYMS = {
+            article: ['artikel', 'artikelname', 'produkt', 'bezeichnung', 'name', 'position', 'item', 'ware'],
+            quantity: ['menge', 'anzahl', 'quantity', 'qty', 'stueckzahl', 'stückzahl'],
+            unit: ['einheit', 'unit', 'me', 'mengeneinheit'],
+            category: ['kategorie', 'category', 'rubrik', 'abteilung', 'gruppe'],
+            note: ['notiz', 'bemerkung', 'kommentar', 'hinweis', 'note', 'info']
+        };
+
+        let sheetJsPromise = null;
+        function loadSheetJS() {
+            if (window.XLSX) return Promise.resolve(window.XLSX);
+            if (!sheetJsPromise) {
+                sheetJsPromise = new Promise((resolve, reject) => {
+                    const script = document.createElement('script');
+                    script.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+                    script.onload = () => resolve(window.XLSX);
+                    script.onerror = () => {
+                        sheetJsPromise = null;
+                        reject(new Error('Excel-Bibliothek konnte nicht geladen werden.'));
+                    };
+                    document.head.appendChild(script);
+                });
+            }
+            return sheetJsPromise;
+        }
+
+        const normalizeText = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9äöüß]/g, '');
+
+        function parseQuantity(value) {
+            const num = typeof value === 'number' ? value : parseFloat(String(value ?? '').replace(',', '.'));
+            return num > 0 ? parseFloat(num.toFixed(2)) : 1;
+        }
+
+        function matchCategory(value) {
+            const key = normalizeText(value);
+            if (!key) return 'sonstiges';
+            const found = CATEGORIES.find(c => normalizeText(c.id) === key || normalizeText(c.label) === key)
+                || CATEGORIES.find(c => normalizeText(c.label).includes(key) || key.includes(normalizeText(c.label.split(' ')[0])));
+            return found ? found.id : 'sonstiges';
+        }
+
+        // Liest das erste Tabellenblatt; Spalten werden über die Überschrift erkannt.
+        // Ohne erkennbare Überschrift gilt die Reihenfolge Artikel, Menge, Einheit, Kategorie, Notiz.
+        async function readItemsFromExcel(file) {
+            const XLSX = await loadSheetJS();
+            const workbook = XLSX.read(await file.arrayBuffer());
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', blankrows: false });
+
+            let columns = { article: 0, quantity: 1, unit: 2, category: 3, note: 4 };
+            let startRow = 0;
+            const headerIdx = rows.slice(0, 10).findIndex(row => row.some(cell => HEADER_SYNONYMS.article.includes(normalizeText(cell))));
+            if (headerIdx >= 0) {
+                columns = {};
+                rows[headerIdx].forEach((cell, colIdx) => {
+                    const key = normalizeText(cell);
+                    Object.entries(HEADER_SYNONYMS).forEach(([field, names]) => {
+                        if (columns[field] === undefined && names.includes(key)) columns[field] = colIdx;
+                    });
+                });
+                startRow = headerIdx + 1;
+            }
+
+            const cell = (row, field) => columns[field] === undefined ? '' : row[columns[field]];
+            return rows.slice(startRow)
+                .map(row => ({
+                    id: crypto.randomUUID(),
+                    article: String(cell(row, 'article') ?? '').trim().substring(0, 200),
+                    quantity: parseQuantity(cell(row, 'quantity')),
+                    unit: String(cell(row, 'unit') ?? '').trim().substring(0, 20),
+                    category: matchCategory(cell(row, 'category')),
+                    note: String(cell(row, 'note') ?? '').trim().substring(0, 300),
+                    done: false
+                }))
+                .filter(item => item.article);
+        }
+
+        // Neue Positionen anhängen; gleiche Artikel (ohne Gross/Klein) werden zusammengezählt
+        function mergeItems(existingItems, newItems) {
+            const merged = existingItems.map(i => ({ ...i }));
+            let added = 0, increased = 0;
+            newItems.forEach(item => {
+                const duplicate = merged.find(i => i.article.toLowerCase() === item.article.toLowerCase());
+                if (duplicate) {
+                    duplicate.quantity = parseFloat((duplicate.quantity + item.quantity).toFixed(2));
+                    increased++;
+                } else {
+                    merged.push(item);
+                    added++;
+                }
+            });
+            return { merged, added, increased };
+        }
+
+        let excelImportTargetListId = null; // null = neue Liste aus dem Anlage-Popup
+
+        window.startExcelImport = (listId = null) => {
+            excelImportTargetListId = listId;
+            const input = document.getElementById('excel-file-input');
+            input.value = '';
+            input.click();
+        };
+
+        window.handleExcelFileSelected = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            let items;
+            try {
+                items = await readItemsFromExcel(file);
+            } catch (err) {
+                showNotification('Datei konnte nicht gelesen werden: ' + err.message, 'error');
+                return;
+            }
+            if (items.length === 0) {
+                showNotification('In der Datei wurden keine Artikel gefunden. Die erste Spalte bzw. die Spalte "Artikel" muss befüllt sein.', 'error');
+                return;
+            }
+
+            if (!excelImportTargetListId) {
+                // Neue Liste: Positionen merken, Titel aus Dateinamen vorschlagen
+                const { merged } = mergeItems([], items);
+                if (merged.length > MAX_ITEMS) {
+                    showNotification(`Die Datei enthält ${merged.length} Artikel, erlaubt sind höchstens ${MAX_ITEMS}.`, 'error');
+                    return;
+                }
+                importedItems = merged;
+                const titleInput = document.getElementById('new-list-title');
+                if (!titleInput.value.trim()) titleInput.value = file.name.replace(/\.[^.]+$/, '');
+                document.getElementById('new-list-template-count').innerText = merged.length;
+                document.getElementById('new-list-template-source').innerText = `"${file.name}"`;
+                document.getElementById('new-list-template-info').classList.remove('hidden');
+                titleInput.focus();
+                titleInput.select();
+                return;
+            }
+
+            // Bestehende Liste: Positionen anhängen
+            const list = shoppingLists.find(l => l.id === excelImportTargetListId);
+            if (!list) return;
+            const { merged, added, increased } = mergeItems(list.items || [], items);
+            if (merged.length > MAX_ITEMS) {
+                showNotification(`Zu viele Positionen: Die Liste hätte danach ${merged.length}, erlaubt sind höchstens ${MAX_ITEMS}.`, 'error');
+                return;
+            }
+            try {
+                await store.update(list.id, { items: merged });
+                showNotification(`${added} Artikel importiert` + (increased ? `, bei ${increased} bestehenden Artikeln die Menge erhöht.` : '.'), 'success');
+            } catch (err) {
+                showNotification('Fehler beim Import: ' + err.message, 'error');
+            }
+        };
+
+        window.exportListToExcel = async (listId) => {
+            const list = shoppingLists.find(l => l.id === listId);
+            if (!list) return;
+
+            try {
+                const XLSX = await loadSheetJS();
+                const items = [...(list.items || [])].sort((a, b) => (a.done === b.done) ? 0 : a.done ? 1 : -1);
+                const rows = items.map(item => [
+                    item.article,
+                    item.quantity,
+                    item.unit || '',
+                    (CATEGORIES.find(c => c.id === item.category) || CATEGORIES[CATEGORIES.length - 1]).label,
+                    item.note || '',
+                    item.done ? 'ja' : ''
+                ]);
+
+                const sheet = XLSX.utils.aoa_to_sheet([EXCEL_COLUMNS, ...rows]);
+                sheet['!cols'] = [{ wch: 30 }, { wch: 8 }, { wch: 10 }, { wch: 20 }, { wch: 30 }, { wch: 9 }];
+                const workbook = XLSX.utils.book_new();
+                const sheetName = (list.title || 'Einkaufsliste').replace(/[\[\]:*?\/\\]/g, ' ').substring(0, 31);
+                XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
+
+                const fileName = (list.title || 'Einkaufsliste').replace(/[<>:"\/\\|?*]/g, '_').trim() + '.xlsx';
+                XLSX.writeFile(workbook, fileName);
+            } catch (err) {
+                showNotification('Fehler beim Export: ' + err.message, 'error');
             }
         };
 

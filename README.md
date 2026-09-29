@@ -14,6 +14,9 @@ Eine schlanke Web-App zum Planen, Teilen und Abhaken von Einkaufslisten – komp
 - **Einkauf abschliessen:** mit Datum, Uhrzeit und Laden (Coop, Migros, Aldi, Lidl, Denner, Spar oder frei). Abgeschlossene Listen sind schreibgeschützt.
 - **Historie & Vorlagen:** Abgeschlossene Einkäufe lassen sich nach Laden filtern und als Vorlage für eine neue Liste wiederverwenden.
 - **Teilen:** Listen öffentlich machen oder gezielt per User-ID freigeben, jeweils mit Recht *Lesen* oder *Bearbeiten*.
+- **Reihenfolge ändern:** Positionen per Drag & Drop in die Laden-Reihenfolge ziehen.
+- **Excel-Export:** jede Liste als `.xlsx` herunterladen (Artikel, Menge, Einheit, Kategorie, Notiz, Erledigt).
+- **Excel-Import:** neue Liste aus einer Excel- oder CSV-Datei anlegen oder Positionen an eine bestehende Liste anhängen. Die Spalten werden an der Überschrift erkannt, nötig ist nur „Artikel“. Doppelte Artikel werden zusammengezählt.
 - **Suche:** über Listentitel, Laden und Artikel.
 
 ## Datenspeicherung
@@ -51,6 +54,8 @@ Danach `http://localhost:8000` (bzw. die angezeigte Adresse) im Browser öffnen.
 - HTML + Vanilla JavaScript (ES-Module)
 - [Tailwind CSS](https://tailwindcss.com) (CDN)
 - [Font Awesome](https://fontawesome.com) für Icons
+- [SortableJS](https://sortablejs.github.io/Sortable/) für Drag & Drop
+- [SheetJS](https://sheetjs.com) für Excel-Import/-Export (wird erst bei Bedarf geladen)
 - [Firebase](https://firebase.google.com) Auth (anonym + Google) + Cloud Firestore
 
 ## Bekannte Einschränkungen
