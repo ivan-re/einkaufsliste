@@ -371,26 +371,111 @@
 
     <!-- Application Logic Script -->
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, collection, onSnapshot, setDoc, updateDoc, deleteDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // ------------------------------------------------------------------
+        // KONFIGURATION
+        // Eigene Firebase-Konfiguration hier eintragen (Firebase Console ->
+        // Projekteinstellungen -> "Meine Apps" -> Web-App). Bleibt sie null,
+        // läuft die App im lokalen Modus (Daten nur in diesem Browser).
+        // ------------------------------------------------------------------
+        const FIREBASE_CONFIG = null;
 
-        // Firebase Initialization Guard
+        // In Google Canvas werden diese Variablen automatisch injiziert,
+        // auf GitHub Pages existieren sie nicht.
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'einkaufsliste-app-default';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' 
-            ? JSON.parse(__firebase_config) 
-            : {
-                apiKey: "AIzaSyDemoConfigOnlyForFallbackLocal",
-                authDomain: "demo-app.firebaseapp.com",
-                projectId: "demo-app",
-                storageBucket: "demo-app.appspot.com",
-                messagingSenderId: "000000000",
-                appId: "1:000000000:web:00000000"
+        const firebaseConfig = typeof __firebase_config !== 'undefined'
+            ? JSON.parse(__firebase_config)
+            : FIREBASE_CONFIG;
+        const USE_FIREBASE = !!(firebaseConfig && firebaseConfig.apiKey);
+
+        // ------------------------------------------------------------------
+        // Storage-Backend: gleiche Schnittstelle für Firestore und localStorage
+        //   subscribe(onData, onError), add(data), update(id, patch), remove(id)
+        // ------------------------------------------------------------------
+        let store;
+        let authUid = null;
+
+        if (USE_FIREBASE) {
+            const { initializeApp } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js");
+            const { getAuth, signInAnonymously, signInWithCustomToken } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js");
+            const { getFirestore, doc, collection, onSnapshot, updateDoc, deleteDoc, addDoc } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
+
+            const app = initializeApp(firebaseConfig);
+            const auth = getAuth(app);
+            const db = getFirestore(app);
+            const listsColRef = collection(db, 'artifacts', appId, 'public', 'data', 'shopping_lists');
+            const listDoc = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'shopping_lists', id);
+
+            store = {
+                async init() {
+                    const cred = (typeof __initial_auth_token !== 'undefined' && __initial_auth_token)
+                        ? await signInWithCustomToken(auth, __initial_auth_token)
+                        : await signInAnonymously(auth);
+                    authUid = cred.user.uid;
+                },
+                subscribe(onData, onError) {
+                    return onSnapshot(listsColRef,
+                        (snapshot) => onData(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))),
+                        onError);
+                },
+                add: (data) => addDoc(listsColRef, data),
+                update: (id, patch) => updateDoc(listDoc(id), patch),
+                remove: (id) => deleteDoc(listDoc(id))
+            };
+        } else {
+            const STORAGE_KEY = 'einkaufsliste_lists_v1';
+            const listeners = new Set();
+
+            const readAll = () => {
+                try {
+                    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+                } catch (err) {
+                    return {};
+                }
+            };
+            const notify = () => {
+                const all = readAll();
+                const lists = Object.entries(all).map(([id, data]) => ({ id, ...data }));
+                listeners.forEach(fn => fn(lists));
+            };
+            const writeAll = (all) => {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+                notify();
             };
 
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
+            // Änderungen aus anderen Tabs übernehmen
+            window.addEventListener('storage', (e) => {
+                if (e.key === STORAGE_KEY) notify();
+            });
+
+            store = {
+                async init() {
+                    authUid = crypto.randomUUID();
+                },
+                subscribe(onData) {
+                    listeners.add(onData);
+                    notify();
+                    return () => listeners.delete(onData);
+                },
+                async add(data) {
+                    const all = readAll();
+                    const id = crypto.randomUUID();
+                    all[id] = JSON.parse(JSON.stringify(data));
+                    writeAll(all);
+                    return { id };
+                },
+                async update(id, patch) {
+                    const all = readAll();
+                    if (!all[id]) throw new Error('Liste nicht gefunden.');
+                    all[id] = { ...all[id], ...JSON.parse(JSON.stringify(patch)) };
+                    writeAll(all);
+                },
+                async remove(id) {
+                    const all = readAll();
+                    delete all[id];
+                    writeAll(all);
+                }
+            };
+        }
 
         // App State
         let currentUser = null;
@@ -418,37 +503,40 @@
         // Units List
         const UNITS = ['Stk', 'kg', 'g', 'l', 'dl', 'Pack', 'Flasche', 'Dose', 'Beutel'];
 
-        // 1. Authenticate user
-        async function initAuth() {
+        // 1. Authenticate user / init storage
+        async function initApp() {
             try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
+                await store.init();
             } catch (err) {
-                console.warn("Auth Fallback:", err);
+                console.error('Init fehlgeschlagen:', err);
+                showNotification('Verbindung zur Datenbank fehlgeschlagen: ' + err.message, 'error');
+                document.getElementById('lists-container').innerHTML = `
+                    <div class="text-center py-12 bg-white rounded-2xl border border-dashed border-rose-300">
+                        <i class="fa-solid fa-triangle-exclamation text-3xl text-rose-500 mb-3"></i>
+                        <p class="text-slate-600 text-sm">Die Datenbank ist nicht erreichbar. Bitte Firebase-Konfiguration prüfen.</p>
+                    </div>`;
+                return;
+            }
+
+            currentUser = { uid: authUid };
+            // Setup or load local identity profile
+            const savedProfile = localStorage.getItem('einkaufsliste_user_profile');
+            if (savedProfile) {
+                currentUserProfile = JSON.parse(savedProfile);
+            } else {
+                currentUserProfile = {
+                    id: authUid,
+                    name: 'User ' + authUid.substring(0, 4)
+                };
+                localStorage.setItem('einkaufsliste_user_profile', JSON.stringify(currentUserProfile));
+            }
+            updateUserDisplay();
+            listenToShoppingLists();
+
+            if (!USE_FIREBASE) {
+                showNotification('Lokaler Modus: Listen werden nur in diesem Browser gespeichert.', 'info');
             }
         }
-
-        onAuthStateChanged(auth, (user) => {
-            if (user) {
-                currentUser = user;
-                // Setup or load local identity profile
-                let savedProfile = localStorage.getItem('einkaufsliste_user_profile');
-                if (savedProfile) {
-                    currentUserProfile = JSON.parse(savedProfile);
-                } else {
-                    currentUserProfile = {
-                        id: user.uid,
-                        name: 'User ' + user.uid.substring(0, 4)
-                    };
-                    localStorage.setItem('einkaufsliste_user_profile', JSON.stringify(currentUserProfile));
-                }
-                updateUserDisplay();
-                listenToShoppingLists();
-            }
-        });
 
         function updateUserDisplay() {
             document.getElementById('current-user-display').innerText = currentUserProfile.name || currentUserProfile.id.substring(0, 6);
@@ -461,17 +549,9 @@
             if (!currentUser) return;
             if (unsubscribeListener) unsubscribeListener();
 
-            const listsColRef = collection(db, 'artifacts', appId, 'public', 'data', 'shopping_lists');
-
-            // RULE 2: Simple snapshot, no complex server queries - memory filtered in JS
-            unsubscribeListener = onSnapshot(listsColRef, (snapshot) => {
-                shoppingLists = [];
-                snapshot.forEach((docSnap) => {
-                    shoppingLists.push({
-                        id: docSnap.id,
-                        ...docSnap.data()
-                    });
-                });
+            // Simple snapshot, no complex server queries - memory filtered in JS
+            unsubscribeListener = store.subscribe((lists) => {
+                shoppingLists = lists;
                 updateStoreFilterOptions();
                 renderLists();
             }, (error) => {
@@ -793,10 +873,9 @@
                     createdAt: new Date().toISOString()
                 };
 
-                const listsColRef = collection(db, 'artifacts', appId, 'public', 'data', 'shopping_lists');
-                await addDoc(listsColRef, newList);
-
                 closeModal('modal-create-list');
+
+                await store.add(newList);
                 showNotification('Einkaufsliste "' + title + '" wurde angelegt!', 'success');
             } catch (err) {
                 showNotification('Fehler beim Anlegen: ' + err.message, 'error');
@@ -840,8 +919,7 @@
             }
 
             try {
-                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'shopping_lists', listId);
-                await updateDoc(docRef, { items: items });
+                await store.update(listId, { items: items });
 
                 // Reset inputs
                 artInput.value = '';
@@ -868,8 +946,7 @@
             item.quantity = newQty;
 
             try {
-                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'shopping_lists', listId);
-                await updateDoc(docRef, { items: items });
+                await store.update(listId, { items: items });
             } catch (err) {
                 showNotification('Fehler beim Aktualisieren der Menge: ' + err.message, 'error');
             }
@@ -889,8 +966,7 @@
             item.quantity = newQty;
 
             try {
-                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'shopping_lists', listId);
-                await updateDoc(docRef, { items: items });
+                await store.update(listId, { items: items });
             } catch (err) {
                 showNotification('Fehler beim Ändern der Menge: ' + err.message, 'error');
             }
@@ -907,8 +983,7 @@
             item.done = !item.done;
 
             try {
-                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'shopping_lists', listId);
-                await updateDoc(docRef, { items: items });
+                await store.update(listId, { items: items });
             } catch (err) {
                 showNotification('Fehler beim Abhaken: ' + err.message, 'error');
             }
@@ -921,8 +996,7 @@
             const updatedItems = (list.items || []).filter(i => i.id !== itemId);
 
             try {
-                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'shopping_lists', listId);
-                await updateDoc(docRef, { items: updatedItems });
+                await store.update(listId, { items: updatedItems });
             } catch (err) {
                 showNotification('Fehler beim Löschen der Position: ' + err.message, 'error');
             }
@@ -953,8 +1027,7 @@
             if (!listId || !datetimeVal) return;
 
             try {
-                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'shopping_lists', listId);
-                await updateDoc(docRef, {
+                await store.update(listId, {
                     status: 'abgeschlossen',
                     completedAt: new Date(datetimeVal).toISOString(),
                     store: storeVal || 'Allgemein'
@@ -992,8 +1065,7 @@
                     createdAt: new Date().toISOString()
                 };
 
-                const listsColRef = collection(db, 'artifacts', appId, 'public', 'data', 'shopping_lists');
-                await addDoc(listsColRef, newList);
+                await store.add(newList);
 
                 switchTab('active');
                 showNotification('Neue offene Liste aus Vorlage gestartet!', 'success');
@@ -1032,8 +1104,7 @@
             else permContainer.classList.add('hidden');
 
             try {
-                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'shopping_lists', currentEditingShareList.id);
-                await updateDoc(docRef, { isPublic: isChecked });
+                await store.update(currentEditingShareList.id, { isPublic: isChecked });
                 currentEditingShareList.isPublic = isChecked;
             } catch (err) {
                 showNotification('Fehler beim Ändern der Sichtbarkeit: ' + err.message, 'error');
@@ -1045,8 +1116,7 @@
             const perm = document.getElementById('share-public-permission').value;
 
             try {
-                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'shopping_lists', currentEditingShareList.id);
-                await updateDoc(docRef, { publicPermission: perm });
+                await store.update(currentEditingShareList.id, { publicPermission: perm });
                 currentEditingShareList.publicPermission = perm;
             } catch (err) {
                 showNotification('Fehler beim Ändern der Berechtigung: ' + err.message, 'error');
@@ -1072,8 +1142,7 @@
             sharedWith[targetUserId] = perm;
 
             try {
-                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'shopping_lists', currentEditingShareList.id);
-                await updateDoc(docRef, { sharedWith: sharedWith });
+                await store.update(currentEditingShareList.id, { sharedWith: sharedWith });
                 
                 document.getElementById('share-target-user-id').value = '';
                 renderSharedUsersList();
@@ -1089,8 +1158,7 @@
             delete sharedWith[targetUserId];
 
             try {
-                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'shopping_lists', currentEditingShareList.id);
-                await updateDoc(docRef, { sharedWith: sharedWith });
+                await store.update(currentEditingShareList.id, { sharedWith: sharedWith });
                 renderSharedUsersList();
                 showNotification('Freigabe wurde widerrufen.', 'info');
             } catch (err) {
@@ -1134,8 +1202,7 @@
             const okBtn = document.getElementById('confirm-ok-btn');
             okBtn.onclick = async () => {
                 try {
-                    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'shopping_lists', listId);
-                    await deleteDoc(docRef);
+                    await store.remove(listId);
                     closeModal('modal-confirm');
                     showNotification('Einkaufsliste wurde gelöscht.', 'info');
                 } catch (err) {
@@ -1268,8 +1335,8 @@
             });
         }
 
-        // Start Auth Engine on load
-        initAuth();
+        // Start app on load
+        initApp();
     </script>
 </body>
 </html>
